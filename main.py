@@ -14,10 +14,7 @@ if args.dataset_name == 'filmtrust':
     args.lambda_value = 0.0003  # lambda of LFM
 
     args.num_template = 8
-    args.num_iterations_FGSM = 10
     args.target_item_index_list = [1371, 1521, 1066, 124, 329]  # [336, 1155, 328, 1164, 1387]
-    args.reshape_value = 2013
-    args.data_shape = [1, 33, 61]
 
 elif args.dataset_name == 'ml-100k':
     args.num_users = 943
@@ -30,10 +27,7 @@ elif args.dataset_name == 'ml-100k':
     args.lambda_value = 0.0001
 
     args.num_template = 10
-    args.num_iterations_FGSM = 10
     args.target_item_index_list = [1324, 1372, 1579, 1485, 1307]  # [1343, 1501, 1318, 113, 512]
-    args.reshape_value = 1683
-    args.data_shape = [1, 33, 51]
 
 elif args.dataset_name == 'ml-1m':
     args.num_users = 6040
@@ -46,10 +40,7 @@ elif args.dataset_name == 'ml-1m':
     args.lambda_value = 0.001
 
     args.num_template = 120
-    args.num_iterations_FGSM = 5
     args.target_item_index_list = [1920, 2089, 140, 1377, 2570]  # [3458, 1577, 3104, 3646, 1722]
-    args.reshape_value = 3706
-    args.data_shape = [1, 34, 109]
 
 elif args.dataset_name == 'ml-10m':
     args.num_users = 35785
@@ -62,10 +53,7 @@ elif args.dataset_name == 'ml-10m':
     args.lambda_value = 0.005
 
     args.num_template = 716
-    args.num_iterations_FGSM = 5
     args.target_item_index_list = [6945, 3018, 12125, 30245, 85]  # [2754, 13846, 841, 109, 2342]
-    args.reshape_value = 32525
-    args.data_shape = [1, 33, 985]
 
 
 model.select_template_profiles()
