@@ -366,34 +366,6 @@ def calc_influence_single_NeuMF(num_users, nonzero_train_indices, train_data, ra
 
     return sorted_influences
 
-# calculate I_pert,atk(x)
-def calc_I_pert_atk(ys, xs1, xs2, v, num_users, do_not_sum_up=True):
-
-    length = len(xs1)
-    if len(v) != length:
-        raise ValueError("xs and v must have the same length.")
-
-    grads = torch.autograd.grad(ys, xs1, create_graph=True)
-
-    assert len(grads) == length
-    elemwise_products = [
-        grad_elem * v_elem.detach()
-        for grad_elem, v_elem in zip(grads, v) if grad_elem is not None
-    ]
-
-    if do_not_sum_up:
-        grads_with_none = [
-            torch.autograd.grad(elemwise_product, xs2, retain_graph=True,
-                                grad_outputs=torch.ones_like(elemwise_product))[0]
-            for elemwise_product in elemwise_products]
-    else:
-        grads_with_none = torch.autograd.grad(elemwise_products, xs2)
-
-    return_grads = [grad_elem if grad_elem is not None else torch.zeros_like(xs2) for grad_elem in grads_with_none]
-    return_grads = [-tensor / num_users for tensor in return_grads]
-    result = torch.sum(torch.stack(return_grads), dim=0)
-
-    return result
 
 
 
@@ -420,6 +392,11 @@ def partial_diffusion(data_id, train_data, influential_instance_index, index_to_
     elif data_id == 'ml-1m':
         influential_instance = train_data[influential_instance_index]
         influential_instance_1 = influential_instance.view(1, 1, 33, 61)
+        influential_instance_2 = influential_instance_1.to(torch.int64)
+        log_x_start = index_to_log_onehot(influential_instance_2, num_classes)
+    elif data_id == 'ml-10m':
+        influential_instance = train_data[influential_instance_index]
+        influential_instance_1 = influential_instance.view(1, 1, 33, 985)
         influential_instance_2 = influential_instance_1.to(torch.int64)
         log_x_start = index_to_log_onehot(influential_instance_2, num_classes)
 
@@ -479,19 +456,39 @@ def integrate_instances(A, B, PCA, dataset_name):
         C2 = torch.sign(C1) * torch.sqrt(torch.abs(C1))
         C3 = C2 / torch.norm(C2, p=2)
         C4 = C3.view(3706, -1)
-
+    
         numpy_tensor = C4.numpy()
         data_standardized = (numpy_tensor - np.mean(numpy_tensor)) / np.std(numpy_tensor)
         pca = PCA(n_components=1)
         data_pca = pca.fit_transform(data_standardized)
         data_pca = data_pca.reshape(len(A))
-
+    
         data_pca[data_pca < -1] = 0
         data_pca = ((data_pca - min(data_pca)) / (max(data_pca) - min(data_pca))) * 8
         data_pca = torch.round(torch.tensor(data_pca))
-
+    
         D = data_pca.view(1, 1, 34, 109)
         influential_instance_integrated = D.to(torch.int64)
+    elif dataset_name == 'ml-10m':
+        C = torch.matmul(A.view(-1, 1), B.view(1, -1))
+        C1 = C.view(-1)
+        C2 = torch.sign(C1) * torch.sqrt(torch.abs(C1))
+        C3 = C2 / torch.norm(C2, p=2)
+        C4 = C3.view(32525, -1)
+    
+        numpy_tensor = C4.numpy()
+        data_standardized = (numpy_tensor - np.mean(numpy_tensor)) / np.std(numpy_tensor)
+        pca = PCA(n_components=1)
+        data_pca = pca.fit_transform(data_standardized)
+        data_pca = data_pca.reshape(len(A))
+    
+        data_pca[data_pca < -1] = 0
+        data_pca = ((data_pca - min(data_pca)) / (max(data_pca) - min(data_pca))) * 32
+        data_pca = torch.round(torch.tensor(data_pca))
+    
+        D = data_pca.view(1, 1, 33, 985)
+        influential_instance_integrated = D.to(torch.int64)
+
 
     return influential_instance_integrated
 

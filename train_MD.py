@@ -28,7 +28,8 @@ class MDPModelTrainer:
         self.epochs = {
             'filmtrust': 50,
             'ml-100k': 50,
-            'ml-1m': 100
+            'ml-1m': 100，
+            'ml-2m': 200，
         }.get(dataset_name, 50)
 
         parser = argparse.ArgumentParser()

@@ -157,6 +157,9 @@ class SegmentationUnet(nn.Module):
         elif dataset_name == 'ml-1m':
             self.target_shape_1 = (32, 64, 32, 128)
             self.target_shape_2 = (32, 6, 34, 109)
+        elif dataset_name == 'ml-10m':
+            self.target_shape_1 = (64, 128, 128, 256)
+            self.target_shape_2 = (64, 6, 33, 985)
 
         for ind, (dim_in, dim_out) in enumerate(in_out):
             is_last = ind >= (num_resolutions - 1)
