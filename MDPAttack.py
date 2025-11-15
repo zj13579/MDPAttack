@@ -1,4 +1,3 @@
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -9,6 +8,7 @@ from sklearn.decomposition import PCA
 from collections import defaultdict
 import math
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import argparse
 from MDPAttack.multinomial_diffusion.diffusion_utils.diffusion_multinomial import *
@@ -66,6 +66,7 @@ class MDPAttack(object):
         parser.add_argument("--mode", default='client')
         parser.add_argument("--host", type=bool, default="localhost")
         parser.add_argument("--port", default=35991)
+        parser.add_argument('--num_workers', type=int, default=4)
 
         return parser.parse_args()
 
@@ -122,12 +123,10 @@ class MDPAttack(object):
 
         self.template_ids = template_ids
 
-
     def train_MD(self):
         args = self.args
         model = MDPModelTrainer(dataset_name=args.dataset_name, device_id=args.cuda_id)
         model_MD = model.train_and_save_model().cpu()
-
 
     def add_noise(self):
         args = self.args
@@ -211,26 +210,43 @@ class MDPAttack(object):
 
         return influential_instance_FGSM, atk_loss_list
 
+    def _first_fgsm_worker(self, influential_instance_index):
+        args = self.args
+        args_dict = self.get_args_dict()
+        _, _, train_data = read_data(args.num_users, args.num_items, path=args_dict['train_data'])
+        influential_instance = train_data[influential_instance_index].to(torch.float32)
+        influential_instance_FGSM, atk_loss_list = self.calc_influential_instance_FGSM(
+            influential_instance_index, influential_instance, train_data
+        )
+        influential_instance_FGSM = influential_instance_FGSM.cpu().to(torch.int64)
+        atk_list = [B.item() for B in atk_loss_list]
+        return influential_instance_FGSM, atk_list
+
     def first_FGSM(self):
         args = self.args
         args_dict = self.get_args_dict()
         first_FGSM_list = []
         atk_list = []
         print(f'\n---------------The first FGSM iteration---------------')
-        for i in range(len(self.template_ids)):
-            _, _, train_data = read_data(args.num_users, args.num_items, path=args_dict['train_data'])
-            influential_instance_index = self.template_ids[i]
-            influential_instance = train_data[influential_instance_index].to(torch.float32)
-            influential_instance_FGSM, atk_loss_list = self.calc_influential_instance_FGSM(influential_instance_index, influential_instance, train_data)
-            influential_instance_FGSM = influential_instance_FGSM.cpu().to(torch.int64)
+
+        with ThreadPoolExecutor(max_workers=args.num_workers) as executor:
+            futures = {
+                executor.submit(self._first_fgsm_worker, tid): idx
+                for idx, tid in enumerate(self.template_ids)
+            }
+            results = [None] * len(self.template_ids)
+            for future in as_completed(futures):
+                idx = futures[future]
+                influential_instance_FGSM, atk_loss = future.result()
+                results[idx] = (influential_instance_FGSM, atk_loss)
+                print(f'----------The {idx + 1}th template is over----------')
+
+        for influential_instance_FGSM, atk_loss in results:
             first_FGSM_list.append(influential_instance_FGSM)
-            A = [B.item() for B in atk_loss_list]
-            atk_list.append(A)
-            print(f'----------The {i + 1}th template is over----------')
+            atk_list.append(atk_loss)
 
         torch.save(first_FGSM_list, args_dict['first_FGSM_list'])
         return first_FGSM_list
-
 
     def sample_integrate(self):
         args = self.args
@@ -246,6 +262,8 @@ class MDPAttack(object):
                 A = influential_instance_perturbed_index.view(-1)[:-1]
             elif args.dataset_name == 'ml-1m':
                 A = influential_instance_perturbed_index.view(-1)
+            elif args.dataset_name == 'ml-10m':
+                A = influential_instance_perturbed_index.view(-1)[:-20]
             A_list.append(A)
         B_list = self.first_FGSM()
 
@@ -257,6 +275,18 @@ class MDPAttack(object):
         torch.save(integrated_list, args_dict['integrated_list'])
         return integrated_list
 
+    def _second_fgsm_worker(self, idx, influential_instance_tensor):
+        args = self.args
+        args_dict = self.get_args_dict()
+        _, _, train_data = read_data(args.num_users, args.num_items, path=args_dict['train_data'])
+        influential_instance = influential_instance_tensor.to(torch.float32)
+        influential_instance_index = self.template_ids[idx]
+        influential_instance_FGSM, atk_loss_list = self.calc_influential_instance_FGSM(
+            influential_instance_index, influential_instance, train_data
+        )
+        influential_instance_FGSM = influential_instance_FGSM.cpu().to(torch.int64)
+        atk_list = [B.item() for B in atk_loss_list]
+        return idx, influential_instance_FGSM, atk_list
 
     def second_FGSM(self):
         args = self.args
@@ -271,25 +301,31 @@ class MDPAttack(object):
                 A1 = A[:-1, ]
             elif args.dataset_name == 'ml-1m':
                 A1 = A
+            elif args.dataset_name == 'ml-10m':
+                A1 = A[:-20, ]
             influential_integrated_list.append(A1)
 
         second_FGSM_list = []
         atk_list = []
         print(f'\n---------------The second FGSM iteration---------------')
-        for i in range(len(self.template_ids)):
-            _, _, train_data = read_data(args.num_users, args.num_items, path=args_dict['train_data'])
-            influential_instance = influential_integrated_list[i].to(torch.float32)
-            influential_instance_index = self.template_ids[i]
-            influential_instance_FGSM, atk_loss_list = self.calc_influential_instance_FGSM(influential_instance_index, influential_instance, train_data)
-            influential_instance_FGSM = influential_instance_FGSM.cpu().to(torch.int64)
+
+        with ThreadPoolExecutor(max_workers=args.num_workers) as executor:
+            futures = {
+                executor.submit(self._second_fgsm_worker, idx, influential_integrated_list[idx]): idx
+                for idx in range(len(self.template_ids))
+            }
+            results = [None] * len(self.template_ids)
+            for future in as_completed(futures):
+                idx, influential_instance_FGSM, atk_loss = future.result()
+                results[idx] = (influential_instance_FGSM, atk_loss)
+                print(f'----------The {idx + 1}th template is over----------')
+
+        for influential_instance_FGSM, atk_loss in results:
             second_FGSM_list.append(influential_instance_FGSM)
-            A = [B.item() for B in atk_loss_list]
-            atk_list.append(A)
-            print(f'----------The{i + 1}th template is over----------')
+            atk_list.append(atk_loss)
 
         torch.save(second_FGSM_list, args_dict['second_FGSM_list'])
         return second_FGSM_list
-
 
     def reverse_diffusion(self):
         args = self.args
@@ -309,11 +345,15 @@ class MDPAttack(object):
                 D_2 = D_1.view(1, 1, 33, 51).to(torch.int64)
             elif args.dataset_name == 'ml-1m':
                 D_2 = A.view(1, 1, 34, 109).to(torch.int64)
+            elif args.dataset_name == 'ml-10m':
+                D = A[-20:].clone()
+                D_1 = torch.cat([A, D])
+                D_2 = D_1.view(1, 1, 33, 985).to(torch.int64)
             D_3 = D_2.to(torch.int64)
             integrated_list_1.append(D_3)
 
         shape = tuple(args.data_shape)
-        num_timesteps = 100
+        num_timesteps = 100  # 20
 
         print(f'\n---------Begin reverse diffusion---------')
         reverse_diffusion_list = []
@@ -332,7 +372,6 @@ class MDPAttack(object):
 
         torch.save(reverse_diffusion_list, args_dict['reverse_diffusion_list'])
         return reverse_diffusion_list
-
 
     def select_profiles(self):
         args = self.args
@@ -353,7 +392,6 @@ class MDPAttack(object):
             selected_profiles.append(sublist[poisoning_num:])
 
         return selected_profiles
-
 
     def poisoning_attack(self):
         args = self.args
@@ -382,8 +420,7 @@ class MDPAttack(object):
         ratings_indices_dict, filtered_indices = obtain_filtered_indices(user_train_ids, item_train_ids,
                                                                          args.target_item_index_list, defaultdict, args.num_items)
         Top_K_list, rec_list = obtain_rec_list(ratings_pred, filtered_indices, defaultdict, args.num_users,
-                                                 ratings_indices_dict, K=10)
-
+                                               ratings_indices_dict, K=10)
 
         print('----------Model training before attack----------')
         if rec == 'LFM':
@@ -397,7 +434,7 @@ class MDPAttack(object):
         ratings_indices_dict, filtered_indices = obtain_filtered_indices(user_train_ids, item_train_ids,
                                                                          args.target_item_index_list, defaultdict, args.num_items)
         origin_Top_K_list, origin_rec_list = obtain_rec_list(ratings_pred, filtered_indices, defaultdict, args.num_users,
-                                                               ratings_indices_dict, K=10)
+                                                             ratings_indices_dict, K=10)
 
         ER_value, RS_value, HR_value, NDCG_value, Recall_value = eval_metric(args.target_item_index_list, Top_K_list,
                                                                              origin_Top_K_list, rec_list,
